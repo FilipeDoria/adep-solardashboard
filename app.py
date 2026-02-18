@@ -168,6 +168,16 @@ DISCONNECTED_RED_THRESHOLD_HOURS = 8  # Hours
 _app_dir = os.path.dirname(os.path.abspath(__file__))
 CAPTCHA_MODEL_PATH = os.path.join(_app_dir, "models", "captcha_huawei.onnx")
 
+# Log CAPTCHA model status at startup (helps debug Render/deploy: cwd vs app dir)
+_captcha_abs = os.path.abspath(CAPTCHA_MODEL_PATH)
+_captcha_exists = os.path.exists(CAPTCHA_MODEL_PATH)
+_LOGGER.info(
+    "[CAPTCHA] Startup check: app_dir=%s, model_path=%s, exists=%s",
+    _app_dir, _captcha_abs, _captcha_exists,
+)
+if not _captcha_exists:
+    _LOGGER.warning("[CAPTCHA] Model file not found at startup; login may fail if FusionSolar requires CAPTCHA.")
+
 # Default accounts (fallback if .env is not available or not configured)
 # IMPORTANT: For production, use .env file instead of hardcoded credentials
 # This is only a fallback for development/testing
