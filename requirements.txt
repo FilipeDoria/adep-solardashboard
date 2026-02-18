@@ -6,4 +6,4 @@ opencv-python-headless>=4.11.0.86
 numpy>=1.26.0,<2.0.0
 onnxruntime>=1.23.2
 python-dotenv==1.0.0
-setuptools>=65.0.0
+setuptools>=65.0.0,<82.0.0
