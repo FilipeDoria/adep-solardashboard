@@ -18,6 +18,8 @@ from fusion_solar_py.exceptions import FusionSolarException
 from requests.exceptions import HTTPError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import json
+import hashlib
 
 # Try to import python-dotenv for .env file support
 try:
@@ -178,6 +180,16 @@ _LOGGER.info(
 if not _captcha_exists:
     _LOGGER.warning("[CAPTCHA] Model file not found at startup; login may fail if FusionSolar requires CAPTCHA.")
 
+# "Captcha required but captcha not found" means: the fusion_solar_py library detected that
+# login required a CAPTCHA, but when it fetched the login page it could not find the element
+# id="verificationCodeInput" in the HTML. This can happen if Huawei changed the page structure,
+# or serves a different page to server IPs (e.g. Render). Reusing sessions (cookies) reduces
+# how often login is needed and thus how often CAPTCHA is triggered.
+
+# Optional: directory to persist FusionSolar session cookies (one file per account).
+# If set (e.g. on Render with a persistent disk), we load/save cookies to avoid re-login and CAPTCHA.
+FUSION_SOLAR_COOKIES_DIR = os.getenv("FUSION_SOLAR_COOKIES_DIR", "").strip() or None
+
 # Default accounts (fallback if .env is not available or not configured)
 # IMPORTANT: For production, use .env file instead of hardcoded credentials
 # This is only a fallback for development/testing
@@ -189,6 +201,45 @@ DEFAULT_ACCOUNTS = [
 # Load environment variables from .env file if available
 if DOTENV_AVAILABLE:
     load_dotenv()
+
+
+def _cookies_path_for_account(account):
+    """Return path to cookie file for this account, or None if persistence is disabled."""
+    if not FUSION_SOLAR_COOKIES_DIR:
+        return None
+    USER, _, SUBDOMAIN = account
+    key = (USER or "") + "|" + (SUBDOMAIN or "")
+    name = hashlib.sha256(key.encode()).hexdigest()[:16] + ".json"
+    return os.path.join(FUSION_SOLAR_COOKIES_DIR, name)
+
+
+def _load_cookies_for_account(account):
+    """Load persisted cookies for this account, or None."""
+    path = _cookies_path_for_account(account)
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else None
+    except Exception as e:
+        _LOGGER.warning("[COOKIES] Failed to load cookies from %s: %s", path, e)
+        return None
+
+
+def _save_cookies_for_account(account, cookies_dict):
+    """Persist cookies for this account. No-op if persistence is disabled or save fails."""
+    path = _cookies_path_for_account(account)
+    if not path or not cookies_dict:
+        return
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cookies_dict, f, indent=0)
+        _LOGGER.info("[COOKIES] Saved session cookies for account to %s", path)
+    except Exception as e:
+        _LOGGER.warning("[COOKIES] Failed to save cookies to %s: %s", path, e)
+
 
 def load_accounts_from_env():
     """
@@ -777,6 +828,11 @@ def get_or_create_client(account):
                 
                 # Initialize client with captcha support if model path is provided
                 client_kwargs = {"huawei_subdomain": SUBDOMAIN}
+                # Reuse persisted cookies if available (reduces logins and CAPTCHA triggers)
+                persisted_cookies = _load_cookies_for_account(account)
+                if persisted_cookies:
+                    client_kwargs["cookies"] = persisted_cookies
+                    _LOGGER.info(f"[SESSION] Loaded persisted cookies for {USER} (will skip login if session valid)")
                 _LOGGER.debug(f"[SESSION] Initial client_kwargs: {client_kwargs}")
                 
                 if CAPTCHA_MODEL_PATH:
@@ -875,6 +931,11 @@ def get_or_create_client(account):
                 _session_pool[USER]["client"] = client
                 _session_pool[USER]["last_used"] = current_time
                 _session_pool[USER]["created_at"] = current_time
+                # Persist cookies so next run can reuse session (fewer logins → fewer CAPTCHAs)
+                try:
+                    _save_cookies_for_account(account, client.get_cookies())
+                except Exception as save_err:
+                    _LOGGER.debug("[COOKIES] Could not save cookies after login: %s", save_err)
                 _LOGGER.info(f"[SESSION] ✓ Login successful for {USER} (took {login_duration:.2f}s)")
                 print(f"Session created successfully ✅ (login took {login_duration:.2f}s)")
             except FusionSolarException as e:

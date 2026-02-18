@@ -1,5 +1,5 @@
 Flask==2.3.2
-fusion_solar_py[captcha]==0.0.27
+fusion_solar_py[captcha]==0.1.1
 gunicorn==20.1.0
 requests==2.31.0
 opencv-python-headless>=4.11.0.86
